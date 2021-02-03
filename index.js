@@ -21,7 +21,13 @@ const pool = new pg.Pool({
 })
 
 const redis_port = process.env.REDIS_PORT || config.REDIS_PORT;
-const redis_client = redis.createClient(redis_port);
+try{
+  const redis_client = redis.createClient(redis_port);
+}
+catch{
+  console.log('Redis connection failure')
+  redis.disconnect()
+}
 
 const queryHandler = (req, res, next) => {
   pool.query(req.sqlQuery).then((r) => {
