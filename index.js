@@ -1,26 +1,37 @@
 const express = require('express')
 const pg = require('pg')
 const redis = require('redis')
+const path = require('path')
+const bodyParser = require('body-parser')
+const fuzzySearch = require('./fuzzy_search.js')
+const config = require('./config.json')
 
 const app = express()
+app.use(express.json());
+// app.use(bodyParser.json({ type: 'application/*+json' }))
 // configs come from standard PostgreSQL env vars
 // https://www.postgresql.org/docs/9.6/static/libpq-envars.html
 // const pool = new pg.Pool()
 const pool = new pg.Pool({
-  user: 'readonly',
-  host: 'work-samples-db.cx4wctygygyq.us-east-1.rds.amazonaws.com',
-  database: 'work_samples',
-  password: 'w2UIO@#bg532!',
-  port: 5432,
+  user: process.env.DB_USER || config.DB_USER,
+  host: process.env.DB_HOST || config.DB_HOST,
+  database: process.env.DB_NAME || config.DB_NAME,
+  password: process.env.DB_PASSWORD || config.DB_PASSWORD,
+  port: process.env.DB_PORT || config.DB_PORT,
 })
 
-const redis_port = process.env.PORT || 6379;
+const redis_port = process.env.REDIS_PORT || config.REDIS_PORT;
 const redis_client = redis.createClient(redis_port);
 
 const queryHandler = (req, res, next) => {
   pool.query(req.sqlQuery).then((r) => {
-    redis_client.setex(req.originalUrl, 120, JSON.stringify(r.rows));
-    return res.json(r.rows || [])
+    redis_client.setex(req.originalUrl, 20, JSON.stringify(r.rows));
+    if(req.originalUrl == '/poi'){
+      res.send(fuzzySearch(r.rows, req.body.query))
+    }
+    else{
+      res.json(r.rows || [])
+    }
   }).catch(next)
 }
 
@@ -32,24 +43,59 @@ const checkCache = (req, res, next) => {
     }
     if (data != null) {
       console.log('cache')
-      res.send(data);
-    } 
+      if(req.originalUrl == '/poi'){
+        res.send(fuzzySearch(JSON.parse(data), req.body.query))
+      }
+      else{
+        res.send(data);
+      }
+    }
     else {
          next();
     }
   });
 };
 
+app.use(express.static('static'))
+
 app.get('/', (req, res) => {
-  res.send('Welcome to EQ Works 😎')
+  res.sendFile(path.join(__dirname + '/index.html'));
 })
+
+app.get('/events/:from/:to', checkCache, (req, res, next) => {
+  console.log(req.body.from, req.body.to)
+  req.sqlQuery = ` 
+    SELECT date, hour, events
+    FROM public.hourly_events
+    WHERE date >= '${req.params.from}T05:00:00.000Z'
+    AND 
+    date <= '${req.params.to}T05:00:00.000Z'
+    ORDER BY date, hour`
+  return next()
+}, queryHandler)
+
+app.get('/stats/:from/:to', checkCache, (req, res, next) => {
+  console.log('here '+req.body.from, req.body.to)
+  req.sqlQuery = ` 
+    SELECT date,
+        SUM(impressions) AS impressions,
+        SUM(clicks) AS clicks,
+        SUM(revenue) AS revenue
+    FROM public.hourly_stats
+    WHERE date >= '${req.params.from}T05:00:00.000Z'
+    AND 
+    date <= '${req.params.to}T05:00:00.000Z'
+    GROUP BY date
+    ORDER BY date`
+  return next()
+}, queryHandler)
 
 app.get('/events/hourly', checkCache, (req, res, next) => {
   console.log(req.originalUrl)
   req.sqlQuery = `
     SELECT date, hour, events 
     FROM public.hourly_events 
-    ORDER BY date, hour 
+    ORDER BY hour, date 
     LIMIT 168;
   `
   return next()
@@ -91,6 +137,14 @@ app.get('/stats/daily', checkCache, (req, res, next) => {
 }, queryHandler)
 
 app.get('/poi', checkCache, (req, res, next) => {
+  req.sqlQuery = `
+    SELECT *
+    FROM public.poi;
+  `
+  return next()
+}, queryHandler)
+
+app.post('/poi', checkCache, (req, res, next) => {
   req.sqlQuery = `
     SELECT *
     FROM public.poi;

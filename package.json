@@ -20,6 +20,7 @@
   "homepage": "https://github.com/EQWorks/ws-product-nodejs#readme",
   "dependencies": {
     "express": "^4.15.3",
+    "fuse.js": "^6.4.6",
     "pg": "^6.2.4",
     "redis": "^3.0.2"
   },
