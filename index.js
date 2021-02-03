@@ -21,13 +21,15 @@ const pool = new pg.Pool({
 })
 
 const redis_port = process.env.REDIS_PORT || config.REDIS_PORT;
-try{
-  const redis_client = redis.createClient(redis_port);
-}
-catch{
-  console.log('Redis connection failure')
-  redis.disconnect()
-}
+const redis_client = redis.createClient(redis_port);
+
+redis_client.on('connect', function(){
+    console.log('Connected to Redis');
+});
+
+redis_client.on('error', function(err) {
+     console.log('Redis error: ' + err);
+});
 
 const queryHandler = (req, res, next) => {
   pool.query(req.sqlQuery).then((r) => {
@@ -42,24 +44,32 @@ const queryHandler = (req, res, next) => {
 }
 
 const checkCache = (req, res, next) => {
-  redis_client.get(req.originalUrl, (err, data) => {
-    if (err) {
-         console.log(err);
-         res.status(500).send(err);
-    }
-    if (data != null) {
-      console.log('cache')
-      if(req.originalUrl == '/poi'){
-        res.send(fuzzySearch(JSON.parse(data), req.body.query))
+  try{
+    redis_client.get(req.originalUrl, (err, data) => {
+      if (err) {
+           console.log(err);
+           next()
       }
-      else{
-        res.send(data);
+      if (data != null) {
+        console.log('cache')
+        if(req.originalUrl == '/poi'){
+          res.send(fuzzySearch(JSON.parse(data), req.body.query))
+        }
+        else{
+          res.send(data);
+        }
       }
-    }
-    else {
-         next();
-    }
-  });
+      else {
+           next();
+      }
+    });
+  }
+  catch(e){
+    console.log(e)
+  }
+  finally{
+    next();
+  }
 };
 
 app.use(express.static('static'))
@@ -81,7 +91,6 @@ app.get('/events/:from/:to', checkCache, (req, res, next) => {
 }, queryHandler)
 
 app.get('/stats/:from/:to', checkCache, (req, res, next) => {
-  console.log('here '+req.body.from, req.body.to)
   req.sqlQuery = ` 
     SELECT date,
         SUM(impressions) AS impressions,
